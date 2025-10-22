@@ -1,0 +1,121 @@
+{
+  "Comment": "HL7v2AutoCT Agentic Pipeline",
+  "StartAt": "ParseHL7Messages",
+  "States": {
+    "ParseHL7Messages": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:238845559334:function:hl7v2_parser",
+      "ResultPath": "$.parser_result",
+      "Next": "AnalyzeHL7Fields"
+    },
+    "AnalyzeHL7Fields": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:238845559334:function:hl7_fields_analysis",
+      "Parameters": {
+        "parsed_segments.$": "$.parsed_segments"
+      },
+      "ResultPath": "$.analysis_result",
+      "Next": "EvaluateTransformationRulesPerSegment"
+    },
+    "EvaluateTransformationRulesPerSegment": {
+      "Type": "Map",
+      "ItemsPath": "$.analysis_result.fields_by_segment",
+      "Parameters": {
+        "segment.$": "$$.Map.Item.Value.segment",
+        "fields.$": "$$.Map.Item.Value.fields"
+      },
+      "MaxConcurrency": 2,
+      "Iterator": {
+        "StartAt": "EvaluateTransformationRules",
+        "States": {
+          "EvaluateTransformationRules": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:238845559334:function:evaluate_transformation_rules",
+            "ResultPath": "$.evaluation_result",
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.EvaluateRulesPerSegmentOutput",
+      "Next": "GenerateHL7Specification"
+    },
+    "GenerateHL7Specification": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:238845559334:function:generate_hl7v2_specification",
+      "Parameters": {
+        "evaluations.$": "$.EvaluateRulesPerSegmentOutput"
+      },
+      "ResultPath": "$.specs",
+      "Next": "GenerateMirthJSCode"
+    },
+    "GenerateMirthJSCode": {
+      "Type": "Map",
+      "ItemsPath": "$.specs.specs",
+      "Parameters": {
+        "segment.$": "$$.Map.Item.Value.segment",
+        "fields.$": "$$.Map.Item.Value.fields"
+      },
+      "MaxConcurrency": 2,
+      "Iterator": {
+        "StartAt": "GenerateJSCode",
+        "States": {
+          "GenerateJSCode": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:238845559334:function:generate_mirth_js_code",
+            "ResultPath": "$.js_result",
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.js_specs",
+      "Next": "ExportMirthXMLJSCode"
+    },
+    "ExportMirthXMLJSCode": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:238845559334:function:export_mirth_xml_js_code",
+      "Parameters": {
+        "specs.$": "$.specs",
+        "js_specs.$": "$.js_specs",
+        "parser_result.$": "$.parser_result",
+        "analysis_result.$": "$.analysis_result",
+        "EvaluateRulesPerSegmentOutput.$": "$.EvaluateRulesPerSegmentOutput"
+      },
+      "ResultPath": "$.xml_specs",
+      "Next": "ValidateJSLogic"
+    },
+    "ValidateJSLogic": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:238845559334:function:validate_js_logic",
+      "Parameters": {
+        "js_specs.$": "$.js_specs"
+      },
+      "ResultPath": "$.validation_report",
+      "Next": "ExportJSValidationReport"
+    },
+    "ExportJSValidationReport": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:238845559334:function:generate_js_code_validation_report",
+      "Parameters": {
+        "validation_report.$": "$.validation_report"
+      },
+      "ResultPath": "$.report_export",
+      "Next": "AggregateResults"
+    },
+    "AggregateResults": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "Pipeline completed successfully",
+        "specs_s3_path.$": "$.specs.s3_path",
+        "specification_download_url.$": "$.specs.download_url",
+        "xml_s3_path.$": "$.xml_specs.s3_path",
+        "validation_report_s3_path.$": "$.report_export.s3_path",
+        "validation_report_download_url.$": "$.report_export.download_url",
+        "xmljs_download_url.$": "$.xml_specs.download_url",
+        "total_segments.$": "$.report_export.total_segments",
+        "total_rows.$": "$.report_export.total_rows"
+      },
+      "ResultPath": "$.final_status",
+      "End": true
+    }
+  }
+}
